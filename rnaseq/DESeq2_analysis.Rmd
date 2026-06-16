@@ -1,0 +1,327 @@
+---
+title: "Differential expression analysis — ARM mutants"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+library(data.table)
+library(DESeq2)
+library(apeglm)
+library(ggplot2)
+library(ggrepel)
+library(pheatmap)
+library(dplyr)
+library(PoiClaClu)
+library(RColorBrewer)
+library(org.At.tair.db)
+
+# Install if necessary:
+# BiocManager::install("data.table")
+# BiocManager::install("DESeq2")
+# BiocManager::install("apeglm")
+# install.packages("ggrepel")
+# BiocManager::install("pheatmap")
+# install.packages("dplyr")
+# BiocManager::install("PoiClaClu")
+# BiocManager::install("RColorBrewer")
+# BiocManager::install("org.At.tair.db")
+```
+
+## Introduction
+
+Three biological replicates were analyzed for each plant line:
+
+- **arm-YL** (arm knocked-down mutant, young leaves): replicates 1, 2, 3
+- **OeAr-7d** (ARM overexpressor, 7-day-old seedlings): replicates 1, 2, 3
+- **arm-7d** (arm knocked-down mutant, 7-day-old seedlings): SRR12606658, SRR12606657, SRR12606656 
+- **armtert-7d** (arm tert double mutant, 7-day-old seedlings): SRR12606655, SRR12606676, SRR12606675 
+
+Wild-type controls:
+
+- **Columbia-0 young leaves** (Col0_YL): replicates 1, 2, 3
+- **Columbia-0 7-day-old seedlings** (Col0_7d): SRR12606666, SRR12606677, SRR12606678 
+
+
+### Model design
+
+A single DESeq2 model (one factor, six levels) was fit using all 18 samples, with Col0_7d
+as the reference level. DEG cutoffs: adjusted p-value < 0.05 and |log2 fold change| > 1.
+
+The following comparisons were extracted:
+
+- arm-YL vs Columbia0-YL
+- OeAr-7d vs Columbia0-7d
+- arm-7d vs Columbia0-7d
+
+---
+
+## Setup — paths
+
+```{r paths}
+info_path <- "data/info_all.csv"   # 18 samples, columns: sample, genotype
+result_dir <- "data/results"       # output directory
+rsem_dir <- "data/rsem"            # directory containing *.genes.results files from RSEM
+
+# DEG cutoff thresholds — adjust to control stringency
+PADJ_CUTOFF <- 0.05
+LFC_CUTOFF  <- 1
+```
+
+```{r setup-dirs}
+dir.create(result_dir, showWarnings = FALSE)
+```
+
+---
+
+## Load count data
+
+RSEM expected counts (column 5 of *.genes.results files) are loaded and rounded to integers
+as required by DESeq2.
+
+```{r load-counts}
+setwd(rsem_dir)
+
+files <- list.files(".", "*genes.results$", full.names = TRUE)
+
+countData <- data.frame(fread(files[1]))[c(1, 5)]
+for (i in 2:length(files)) {
+  countData <- cbind(countData, data.frame(fread(files[i]))[5])
+}
+
+columns <- gsub("Aligned.toTranscriptome.out.rsem.genes.results", "", files)
+columns <- gsub("./", "", columns)
+colnames(countData) <- c("GeneID", columns)
+
+rownames(countData) <- countData$GeneID
+countData <- countData[, c(2:ncol(countData))]
+countData <- round(countData)
+colnames(countData)
+```
+
+```{r rename-columns}
+# Rename columns to clean sample names matching the info CSV genotype assignments.
+# Files are loaded in alphabetical order by list.files(); column names must match that order exactly.
+colnames(countData) <- c(
+  "arm_YL_1", "arm_YL_2", "arm_YL_3",
+  "Col0_YL_1", "Col0_YL_2", "Col0_YL_3",
+  "OeAr_7d_1", "OeAr_7d_2", "OeAr_7d_3",
+  "armtert_7d_1", "arm_7d_3", "arm_7d_2", "arm_7d_1",
+  "Col0_7d_3", "armtert_7d_3", "armtert_7d_2",
+  "Col0_7d_2", "Col0_7d_1"
+)
+```
+
+---
+
+## Model design
+
+```{r build-dds}
+info <- read.csv(info_path, header = TRUE, sep = ",", stringsAsFactors = FALSE)
+print(info)
+
+dds <- DESeqDataSetFromMatrix(countData, info, ~genotype)
+dds$genotype <- relevel(dds$genotype, ref = "Col7d")
+
+# Explore model matrix
+model.matrix(design(dds), colData(dds))
+```
+
+---
+
+## Shared functions
+
+```{r annotate-function}
+# Annotates DESeq2 results with gene symbol and full gene name from org.At.tair.db
+annotate_res <- function(df) {
+
+  my_keys <- unique(rownames(df))
+  my_col  <- c("SYMBOL", "GENENAME")
+
+  annotation_results <- AnnotationDbi::select(
+    org.At.tair.db, keys = my_keys, columns = my_col, keytype = "TAIR"
+  )
+
+  df      <- as.data.frame(df)
+  df$TAIR <- rownames(df)
+
+  merged_df <- merge(df, annotation_results, by = "TAIR", all.x = TRUE)
+
+  unique_values <- unique(df$TAIR)
+
+  for (tair_value in unique_values) {
+    current_group <- filter(merged_df, TAIR == tair_value)
+
+    if (any(is.na(current_group$SYMBOL))) {
+      symbol <- NA
+    } else if (length(current_group$SYMBOL) > 1) {
+      symbol <- paste(unique(current_group$SYMBOL), collapse = ";")
+    } else {
+      symbol <- current_group$SYMBOL
+    }
+
+    if (any(is.na(current_group$GENENAME))) {
+      genename <- NA
+    } else if (length(current_group$GENENAME) > 1) {
+      genename <- paste(unique(current_group$GENENAME), collapse = ";")
+    } else {
+      genename <- current_group$GENENAME
+    }
+
+    subset_idx <- df$TAIR == tair_value
+    if (any(subset_idx)) {
+      df[subset_idx, "SYMBOL"]   <- if (length(symbol) == 0)   NA else symbol
+      df[subset_idx, "GENENAME"] <- if (length(genename) == 0) NA else genename
+    }
+  }
+
+  return(df)
+}
+```
+
+```{r extract-function}
+# Extracts, annotates, and saves DESeq2 results for a comparison against the model's reference level.
+# contr: coefficient name from resultsNames(ddsDE)
+extract_res <- function(ddsDE, compare_name, contr) {
+  res <- results(ddsDE, alpha = PADJ_CUTOFF, contrast = list(contr))
+  res <- res[order(res$padj), ]
+  res <- annotate_res(res)
+
+  upregulated   <- subset(res, padj < PADJ_CUTOFF & log2FoldChange >  LFC_CUTOFF)
+  downregulated <- subset(res, padj < PADJ_CUTOFF & log2FoldChange < -LFC_CUTOFF)
+
+  write.csv(res,           paste0(compare_name, "_all_DESeq2.csv"))
+  write.csv(upregulated,   paste0(compare_name, "_upregulated_DESeq2.csv"))
+  write.csv(downregulated, paste0(compare_name, "_downregulated_DESeq2.csv"))
+  return(res)
+}
+```
+
+```{r extract-function-2}
+# Extracts, annotates, and saves DESeq2 results for an explicit genotype-vs-genotype contrast
+extract_res2 <- function(ddsDE, compare_name, contr) {
+  res <- results(ddsDE, alpha = PADJ_CUTOFF, contrast = contr)
+  res <- res[order(res$padj), ]
+  res <- annotate_res(res)
+
+  upregulated   <- subset(res, padj < PADJ_CUTOFF & log2FoldChange >  LFC_CUTOFF)
+  downregulated <- subset(res, padj < PADJ_CUTOFF & log2FoldChange < -LFC_CUTOFF)
+
+  write.csv(res,           paste0(compare_name, "_all_DESeq2.csv"))
+  write.csv(upregulated,   paste0(compare_name, "_upregulated_DESeq2.csv"))
+  write.csv(downregulated, paste0(compare_name, "_downregulated_DESeq2.csv"))
+  return(res)
+}
+```
+
+```{r volcano-function}
+create_volcano_plot <- function(res, title, output_file) {
+
+  res$threshold <- factor(ifelse(
+    res$padj < PADJ_CUTOFF & abs(res$log2FoldChange) > LFC_CUTOFF,
+    ifelse(res$log2FoldChange > LFC_CUTOFF, "Upregulated", "Downregulated"),
+    "Not Significant"
+  ))
+
+  res$padj[is.na(res$padj)] <- 1
+
+  p <- ggplot(res, aes(x = log2FoldChange, y = -log10(padj))) +
+    geom_point(aes(color = threshold), alpha = 0.8, size = 1.75) +
+    scale_color_manual(values = c(
+      "Upregulated"     = "red",
+      "Downregulated"   = "blue",
+      "Not Significant" = "grey"
+    )) +
+    labs(title = title, x = "Log2 Fold Change", y = "-Log10 Adjusted P-Value") +
+    theme_minimal() +
+    theme(
+      plot.title       = element_text(hjust = 0.5, size = 16),
+      axis.title       = element_text(size = 14),
+      legend.title     = element_blank(),
+      legend.position  = "top",
+      panel.background = element_rect(fill = "white", color = NA),
+      plot.background  = element_rect(fill = "white", color = NA)
+    )
+
+  print(p)
+  ggsave(output_file, plot = p, width = 8, height = 6, dpi = 300)
+}
+```
+
+---
+
+## Differential expression
+
+```{r run-deseq}
+dds   <- estimateSizeFactors(dds)
+ddsDE <- DESeq(dds)
+
+resultsNames(ddsDE)
+```
+
+## Exploratory plots
+
+```{r plots}
+setwd(result_dir)
+
+poisd <- PoissonDistance(t(counts(dds)))
+samplePoisDistMatrix <- as.matrix(poisd$dd)
+rownames(samplePoisDistMatrix) <- dds$sample
+colnames(samplePoisDistMatrix) <- NULL
+colors <- colorRampPalette(rev(brewer.pal(9, "Blues")))(255)
+pheatmap(samplePoisDistMatrix,
+         clustering_distance_rows = poisd$dd,
+         clustering_distance_cols = poisd$dd,
+         col = colors,
+         filename = "sample_poisson_distance_heatmap.png",
+         width = 8, height = 6, dpi = 300)
+
+vsd   <- vst(dds)
+p_pca <- plotPCA(vsd, intgroup = "sample")
+print(p_pca)
+ggsave("PCA_plot_vst.png", plot = p_pca, width = 8, height = 6, dpi = 300)
+```
+
+## Results
+
+```{r results}
+setwd(result_dir)
+
+res_OeAr     <- extract_res(ddsDE, "OeAr7d_vs_Col7d",     "genotype_OeAr7d_vs_Col7d")
+res_arm7d    <- extract_res(ddsDE, "arm7d_vs_Col7d",       "genotype_arm7d_vs_Col7d")
+res_armL <- extract_res2(ddsDE, "armL_vs_ColL", c("genotype", "armL", "ColL"))
+```
+
+## Normalized counts
+
+```{r counts}
+setwd(result_dir)
+normCounts <- counts(ddsDE, normalized = TRUE)
+write.csv(normCounts, "normalizedReadCounts.csv")
+```
+
+## Volcano plots
+
+```{r volcano, warning=FALSE}
+setwd(result_dir)
+
+results_list <- list(
+  "OeAr7d_vs_Col7d" = res_OeAr,
+  "arm7d_vs_Col7d"  = res_arm7d,
+  "armL_vs_ColL"    = res_armL
+)
+
+for (name in names(results_list)) {
+  create_volcano_plot(
+    res         = results_list[[name]],
+    title       = paste("Volcano Plot:", name),
+    output_file = paste0(name, "_volcano_plot.png")
+  )
+}
+```
+
+## Session info
+
+```{r session-info}
+sessionInfo()
+```

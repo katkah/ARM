@@ -1,0 +1,172 @@
+---
+title: "Gene Ontology enrichment — ARM mutants"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+library(data.table)
+library(ggplot2)
+library(ggrepel)
+library(dplyr)
+library(RColorBrewer)
+library(GO.db)
+library(org.At.tair.db)
+library(clusterProfiler)
+library(AnnotationDbi)
+library(enrichplot)
+
+# Install if necessary:
+# BiocManager::install("clusterProfiler")
+# BiocManager::install("enrichplot")
+# BiocManager::install("org.At.tair.db")
+# BiocManager::install("GO.db")
+# BiocManager::install("AnnotationDbi")
+```
+
+## Introduction
+
+Gene Ontology (GO) enrichment analysis was performed using clusterProfiler to identify
+overrepresented biological processes (BP), molecular functions (MF), and cellular components
+(CC) in the sets of differentially expressed genes (DEGs) from each comparison.
+
+The gene universe for each comparison is defined as all genes present in the full DESeq2
+results table for that comparison. DEGs are the upregulated and downregulated subsets
+(padj < 0.05 and |log2FC| > 1), and GO enrichment is calculated separately for each
+direction in each comparison.
+
+---
+
+## Setup — paths
+
+Results from DESeq2_analysis.Rmd are read from a single result directory (one combined model,
+four comparisons). GO output is written to `data/go_results/`.
+
+```{r paths}
+in_dir  <- "data/results"     # DESeq2 results (all comparisons)
+out_dir <- "data/go_results"  # GO enrichment output
+```
+
+```{r setup-dirs}
+dir.create(file.path(out_dir, "GO_plots"), recursive = TRUE, showWarnings = FALSE)
+result_dir_pngs <- file.path(out_dir, "GO_plots")
+```
+
+---
+
+## Functions
+
+```{r go-function}
+# Runs clusterProfiler enrichGO for a given set of target and universe TAIR IDs.
+# Writes results table to out_dir and returns the enrichResult object.
+calcGO <- function(universeIDs, targetIDs, outGO, onto) {
+
+  ego <- enrichGO(
+    gene          = targetIDs,
+    universe      = universeIDs,
+    OrgDb         = org.At.tair.db,
+    keyType       = "TAIR",
+    ont           = onto,
+    pAdjustMethod = "BH",
+    pvalueCutoff  = 0.01
+  )
+
+  if (is.null(ego) || nrow(ego) == 0) {
+    message("No significant GO terms found: ", outGO)
+    return(NULL)
+  }
+
+  write.table(as.data.frame(ego), file = outGO, sep = "\t",
+              col.names = TRUE, row.names = FALSE, quote = FALSE)
+  return(ego)
+}
+```
+
+```{r plot-function}
+# Saves a barplot of the top 20 GO terms to a PNG file.
+save_GO_plot <- function(ego, file_name, compare_name, suffix, onto) {
+
+  if (is.null(ego) || nrow(ego) == 0) return(NULL)
+
+  tryCatch({
+    p <- barplot(ego, showCategory = min(20, nrow(ego))) +
+         ggplot2::ggtitle(paste("GO enrichment —", suffix, "genes in", compare_name))
+    ggplot2::ggsave(file_name, plot = p, width = 12, height = 8, dpi = 250)
+    cat("Saved:", file_name, "\n")
+  }, error = function(e) {
+    cat("Error plotting", compare_name, suffix, onto, ":", e$message, "\n")
+  })
+}
+```
+
+```{r process-function}
+# Processes GO enrichment for all three ontologies for one comparison.
+process_comparison <- function(my_name, in_dir, onto) {
+
+  df_down <- read.csv(file.path(in_dir, paste0(my_name, "_downregulated_DESeq2.csv")))
+  df_up   <- read.csv(file.path(in_dir, paste0(my_name, "_upregulated_DESeq2.csv")))
+  df_all  <- read.csv(file.path(in_dir, paste0(my_name, "_all_DESeq2.csv")))
+
+  # Build universe: all genes present in the full results table for this comparison.
+  all_ids     <- as.character(unique(df_all$TAIR))
+  all_ids     <- all_ids[!is.na(all_ids) & all_ids != ""]
+  universeIDs <- all_ids[all_ids %in% keys(org.At.tair.db, keytype = "TAIR")]
+
+  # Filter target IDs the same way
+  downIDs <- as.character(unique(df_down$TAIR))
+  downIDs <- downIDs[!is.na(downIDs) & downIDs != ""]
+  downIDs <- downIDs[downIDs %in% keys(org.At.tair.db, keytype = "TAIR")]
+
+  upIDs <- as.character(unique(df_up$TAIR))
+  upIDs <- upIDs[!is.na(upIDs) & upIDs != ""]
+  upIDs <- upIDs[upIDs %in% keys(org.At.tair.db, keytype = "TAIR")]
+
+  cat("\n===", my_name, onto, "===\n")
+  cat("Universe:", length(universeIDs), "| Up:", length(upIDs), "| Down:", length(downIDs), "\n")
+
+  if (length(upIDs) > 0) {
+    ego_up <- calcGO(
+      universeIDs = universeIDs,
+      targetIDs   = upIDs,
+      outGO       = file.path(out_dir, paste0(my_name, "_upregulated_GO_", onto, ".txt")),
+      onto        = onto
+    )
+    save_GO_plot(ego_up,
+      file.path(result_dir_pngs, paste0(my_name, "_GO_", onto, "_upregulated.png")),
+      my_name, "upregulated", onto)
+  }
+
+  if (length(downIDs) > 0) {
+    ego_down <- calcGO(
+      universeIDs = universeIDs,
+      targetIDs   = downIDs,
+      outGO       = file.path(out_dir, paste0(my_name, "_downregulated_GO_", onto, ".txt")),
+      onto        = onto
+    )
+    save_GO_plot(ego_down,
+      file.path(result_dir_pngs, paste0(my_name, "_GO_", onto, "_downregulated.png")),
+      my_name, "downregulated", onto)
+  }
+}
+```
+
+---
+
+## Run GO enrichment for all comparisons
+
+```{r go-all}
+onto_list <- c("BP", "CC", "MF")
+
+comparison_names <- sub("_upregulated_DESeq2\\.csv$", "",
+                      list.files(in_dir, pattern = "_upregulated_DESeq2\\.csv$"))
+
+for (onto in onto_list) {
+  sapply(comparison_names, process_comparison, in_dir = in_dir, onto = onto)
+}
+```
+
+## Session info
+
+```{r session-info}
+sessionInfo()
+```

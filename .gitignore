@@ -1,0 +1,6 @@
+# RSEM gene-count files — regenerable from public FASTQs via the pipeline scripts
+rnaseq/data/rsem/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
