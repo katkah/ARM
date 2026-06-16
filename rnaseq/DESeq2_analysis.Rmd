@@ -7,9 +7,7 @@ date: "`r Sys.Date()`"
 ```{r setup, include=FALSE}
 library(data.table)
 library(DESeq2)
-library(apeglm)
 library(ggplot2)
-library(ggrepel)
 library(pheatmap)
 library(dplyr)
 library(PoiClaClu)
@@ -19,8 +17,6 @@ library(org.At.tair.db)
 # Install if necessary:
 # BiocManager::install("data.table")
 # BiocManager::install("DESeq2")
-# BiocManager::install("apeglm")
-# install.packages("ggrepel")
 # BiocManager::install("pheatmap")
 # install.packages("dplyr")
 # BiocManager::install("PoiClaClu")

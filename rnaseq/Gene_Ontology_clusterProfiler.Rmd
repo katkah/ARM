@@ -5,11 +5,7 @@ date: "`r Sys.Date()`"
 ---
 
 ```{r setup, include=FALSE}
-library(data.table)
 library(ggplot2)
-library(ggrepel)
-library(dplyr)
-library(RColorBrewer)
 library(GO.db)
 library(org.At.tair.db)
 library(clusterProfiler)
