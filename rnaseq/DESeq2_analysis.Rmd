@@ -28,15 +28,15 @@ library(org.At.tair.db)
 
 Three biological replicates were analyzed for each plant line:
 
-- **arm-YL** (arm knocked-down mutant, young leaves): replicates 1, 2, 3
-- **OeAr-7d** (ARM overexpressor, 7-day-old seedlings): replicates 1, 2, 3
-- **arm-7d** (arm knocked-down mutant, 7-day-old seedlings): SRR12606658, SRR12606657, SRR12606656 
-- **armtert-7d** (arm tert double mutant, 7-day-old seedlings): SRR12606655, SRR12606676, SRR12606675 
+- **arm-YL** (arm knocked-down mutant, young leaves): SRR36181525, SRR36181534, SRR36181536
+- **OeAr-7d** (ARM overexpressor, 7-day-old seedlings): SRR36181530, SRR36181531, SRR36181532
+- **arm-7d** (arm knocked-down mutant, 7-day-old seedlings): SRR12606658, SRR12606657, SRR12606656
+- **armtert-7d** (arm tert double mutant, 7-day-old seedlings): SRR12606655, SRR12606676, SRR12606675
 
 Wild-type controls:
 
-- **Columbia-0 young leaves** (Col0_YL): replicates 1, 2, 3
-- **Columbia-0 7-day-old seedlings** (Col0_7d): SRR12606666, SRR12606677, SRR12606678 
+- **Columbia-0 young leaves** (Col0_YL): SRR36181526, SRR36181527, SRR36181528
+- **Columbia-0 7-day-old seedlings** (Col0_7d): SRR12606666, SRR12606677, SRR12606678
 
 
 ### Model design
